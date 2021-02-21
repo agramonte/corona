@@ -204,6 +204,110 @@ function PluginCollectorSolar2DDirectory:collect(destination, plugin, pluginTabl
     return true
 end
 
+-- cabagomez Free Collector
+local PluginCollectorcabagomezFreeDirectory =  { name = "CabaGomez Free Directory"}
+function PluginCollectorcabagomezFreeDirectory:init(params)
+  local t = {}
+	local directoryPluginsText, msg = fetch("https://raw.githubusercontent.com/agramonte/com.cabagomez/master/plugins.json")
+  if not directoryPluginsText then
+        log("cabagomez free plugins: error initializing directory " .. tostring(msg))
+		return
+	end
+	local directoryPlugins = json.decode( directoryPluginsText )
+	if not directoryPlugins then
+		return
+    end
+
+    self.pluginsCache = {}
+
+    for repoOwner, repoObject in pairs(directoryPlugins) do
+        for providerName,providerObject  in pairs(repoObject) do
+            for pluginName, pluginObject in pairs(providerObject) do
+                self.pluginsCache[providerName .. SEP .. pluginName] = {repo = repoOwner, plugin = pluginObject}
+            end
+        end
+	end
+	return true
+end
+
+
+function PluginCollectorcabagomezFreeDirectory:collect(destination, plugin, pluginTable, pluginPlatform, params)
+    if not self.pluginsCache then
+        return "cabagomez Free Directory: directory was not fetched"
+    end
+    if not pluginTable.marketplaceId then
+        return "cabagomez Free Directory: skipped because marketplaceId is not set"
+    end
+    local pluginEntry = self.pluginsCache[tostring(pluginTable.publisherId) .. SEP .. plugin]
+    if not pluginEntry then
+        return "cabagomez Free Directory: plugin " .. plugin .. " was not found at cabagomez Free Directory"
+    end
+
+    local pluginObject = pluginEntry.plugin
+    local repoOwner = pluginEntry.repo
+    if pluginObject.e then
+        return "! " .. pluginObject.e
+    end
+
+    local build = tonumber(params.build)
+    local vFoundBuid, vFoundObject, vFoundBuildName
+    local pluginVersion = pluginObject.r
+    for entryBuild, entryObject in pairs(pluginObject.v or {}) do
+        local entryBuildNumber = tonumber(entryBuild:match('^%d+%.(%d+)$'))
+        if entryBuildNumber <= build and entryBuildNumber > (vFoundBuid or 0) then
+            vFoundBuid = entryBuildNumber
+            vFoundObject = entryObject
+            vFoundBuildName = entryBuild
+        end
+    end
+    if not vFoundBuid then
+        return "cabagomez Free Directory: unable to find compatible version for " .. plugin .. "."
+    end
+    local hasPlatform = false
+    for i=1,#vFoundObject do
+        hasPlatform = hasPlatform or vFoundObject[i] == pluginPlatform
+    end
+    if not hasPlatform then
+        if params.canSkip then
+            log("cabagomez Free Directory: skipped plugin " .. plugin .. " because platform " .. pluginPlatform .. " is not supported")
+        end
+        return params.canSkip or "cabagomez Free Directory: skipped plugin " .. plugin .. " because platform " .. pluginPlatform .. " is not supported"
+    end
+    
+    local downloadURL = "https://github.com/agramonte/com.cabagomez/raw/master/"..plugin.."/".. pluginPlatform.. "/data.tgz"
+    local cacheDir = pathJoin(params.pluginStorage, "Caches", "cabagomezFreeDirectory", repoOwner, pluginTable.publisherId, plugin, pluginPlatform )
+    local cacheUrlFile = pathJoin(cacheDir, "info.txt")
+    local cacheDestFile = pathJoin(cacheDir, "data.tgz")
+    local validCache = false
+    if isFile(cacheUrlFile) and isFile(cacheDestFile) then
+        local f = io.open(cacheUrlFile, "rb")
+        if f then
+            validCache = f:read("*all") == downloadURL
+            f:close()
+        end
+    end
+
+
+    if not validCache then
+        mkdirs(cacheDir)
+        local result, err = download(downloadURL, cacheDestFile)
+        if not result then
+            return "cabagomez Free Directory: unable to download " .. plugin .. '. Code: ' .. err
+        end
+        local f = io.open(cacheUrlFile, "wb")
+        if f then
+            f:write(downloadURL)
+            f:close()
+        end
+    else
+        log("cabagomez Free Directory: cache hit " .. plugin)
+    end
+
+    mkdirs(destination)
+    copyFile(cacheDestFile, destination)
+    return true
+end
+
 
 -- Solar2d Marketplace Collector
 local PluginCollectorSolar2DMarketplaceDirectory =  { name = "Solar2d Marketplace Directory"}
@@ -605,7 +709,14 @@ local function CollectCoronaPlugins(params)
 
     local ret = nil
 
-    local pluginLocators = { pluginLocatorCustomURL, pluginLocatorFileSystemVersionized, pluginLocatorFileSystem, pluginLocatorFileSystemAllPlatforms, PluginCollectorSolar2DMarketplaceDirectory, PluginCollectorSolar2DDirectory, pluginLocatorIgnoreMissing }
+    local pluginLocators = { pluginLocatorCustomURL, 
+    pluginLocatorFileSystemVersionized, 
+    pluginLocatorFileSystem, 
+    pluginLocatorFileSystemAllPlatforms, 
+    PluginCollectorSolar2DMarketplaceDirectory, 
+    PluginCollectorSolar2DDirectory, 
+    PluginCollectorcabagomezFreeDirectory,
+    pluginLocatorIgnoreMissing }
 
     local dstDir = params.destinationDirectory
 
